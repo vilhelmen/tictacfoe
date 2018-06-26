@@ -1,4 +1,5 @@
 from py2neo import Node, Graph, Relationship
+import itertools
 # Maybe just use the raw neo4j library?
 
 
@@ -16,7 +17,7 @@ graph_edges = []
 
 # Strings are immutable, so woo hoo.
 # Replace elements with text[:1] + 'Z' + text[2:]
-def recurse_board(current_state, move, previous_state_node):
+def recurse_board(current_state, move, previous_state_node, init=False):
     # Validate
     # Check all win states, panic if we have more than one win and return
 
@@ -93,13 +94,17 @@ def recurse_board(current_state, move, previous_state_node):
 
     # Add to the node pile
     if current_state not in graph_nodes:
-        graph_nodes[current_state] = Node("BoardState")
+        graph_nodes[current_state] = Node("Board")
+        if not len(graph_nodes) % 100:
+            print(len(graph_nodes), 'nodes!')
     current_state_node = graph_nodes[current_state]
-    graph_edges.append(Relationship(previous_state_node, "Move", current_state_node, move=move))
+    # If we're not the first board, we have a parent board.
+    if not init:
+        graph_edges.append(Relationship(previous_state_node, "Move", current_state_node, who=move))
 
     if winner:
         # Properties can be added after the fact without messing up relationships, I checked!
-        current_state_node['victory'] = winner
+        current_state_node['winner'] = winner
         return
 
     # Get indices of empty spaces. this could be passed in. We'd have to watch for edits, or just use slices!
@@ -108,6 +113,86 @@ def recurse_board(current_state, move, previous_state_node):
 
     # Iterate through them, changing each piece to U, T and then back to ' ' and move to the next spot
     # (num of empty spaces also happens to be the inverse of piece total)
+    for new_move in next_moves:
+        # new_move in the index of a space to modify
+        # We need to generate len(next_moves)*2 new boards and send them to the next level of processing
+        for x in ['U', 'T']:
+            # Thread these if init (But they'd probably have to be processes and uggghhhhh)
+            recurse_board(current_state[0:new_move] + x + current_state[new_move+1:], x, current_state)
+    else:
+        # We didn't actually have any moves left, the board is full. No one wins.
+        current_state_node['winner'] = 'N'
+
+    return
+
+
+def stat_check():
+    # Run through all states as a sanity check
+    states = itertools.combinations_with_replacement(' UT', 9)
+    total_wins, total_losses, total_ties, total_invalid, total = (0, 0, 0, 0, 3**9)
+    for current_state in states:
+        winner_set = set()
+        if current_state[0] in {'U', 'T'}:
+            # 3 states
+            # *--
+            # |\
+            # | \
+            cat_wins = 0
+            if current_state[0] == current_state[4] and current_state[0] == current_state[8]:
+                cat_wins += 1
+            if current_state[0] == current_state[3] and current_state[0] == current_state[6]:
+                cat_wins += 1
+            if current_state[0] == current_state[1] and current_state[0] == current_state[2]:
+                cat_wins += 1
+            if cat_wins:
+                wins += cat_wins
+                winner_set.add(current_state[4])
+        if current_state[4] in {'U', 'T'}:
+            # The two diagonals could go here but I'm not sure that's better?
+            # It would make the branches more unbalanced.
+            # Generated states with multiple win states are less likely than others^[citation needed]
+            # Mmmmm I can't tell what that implies at 2:30 AM.
+            # Spreading it out more evenly... UHHHHH??????
+            # 2 states
+            #  |
+            # -*-
+            #  |
+            cat_wins = 0
+            if current_state[3] == current_state[4] and current_state[3] == current_state[5]:
+                cat_wins += 1
+            if current_state[1] == current_state[4] and current_state[1] == current_state[7]:
+                cat_wins += 1
+            if cat_wins:
+                wins += cat_wins
+                winner_set.add(current_state[4])
+        if current_state[4] in {'U', 'T'}:
+            # 3 states
+            # \ |
+            #  \|
+            # --*
+            cat_wins = 0
+            if current_state[6] == current_state[7] and current_state[6] == current_state[8]:
+                cat_wins += 1
+            if current_state[2] == current_state[5] and current_state[2] == current_state[8]:
+                cat_wins += 1
+            if current_state[6] == current_state[4] and current_state[6] == current_state[2]:
+                cat_wins += 1
+            if cat_wins:
+                wins += cat_wins
+                winner_set.add(current_state[4])
+
+        if wins == 0:
+            if ' ' not in current_state:
+                total_ties += 1
+        if wins == 1:
+            if 'U' in winner_set:
+                total_wins += 1
+            else:
+                total_losses += 1
+        else:
+            total_invalid += 1
+
+    return total_wins, total_losses, total_ties, total_invalid, total
 
 
 def recurse_generate():
@@ -141,9 +226,12 @@ def recurse_generate():
     # That seems like an edit distance problem, though.
     # The generator is so easy though...
 
-    board_start = "        "
+    print("Launching DFS build!")
 
-    recurse_board()
+    recurse_board("         ", "???", "?????????", True)
+
+    print("Done processing! (??)")
+    print(len(graph_nodes), "nodes and", len(graph_edges), "edges. Woooo")
 
 
 if __name__ == '__main__':
