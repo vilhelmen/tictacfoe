@@ -128,9 +128,10 @@ def recurse_board(current_state, move, previous_state_node, init=False):
 
 def stat_check():
     # Run through all states as a sanity check
-    states = itertools.combinations_with_replacement(' UT', 9)
+    states = itertools.product(' UT', repeat=9)
     total_wins, total_losses, total_ties, total_invalid, total = (0, 0, 0, 0, 3**9)
     for current_state in states:
+        wins = 0
         winner_set = set()
         if current_state[0] in {'U', 'T'}:
             # 3 states
@@ -184,7 +185,7 @@ def stat_check():
         if wins == 0:
             if ' ' not in current_state:
                 total_ties += 1
-        if wins == 1:
+        elif wins == 1:
             if 'U' in winner_set:
                 total_wins += 1
             else:
@@ -192,6 +193,7 @@ def stat_check():
         else:
             total_invalid += 1
 
+    print(total_wins, total_losses, total_ties, total_invalid, total)
     return total_wins, total_losses, total_ties, total_invalid, total
 
 
@@ -235,4 +237,5 @@ def recurse_generate():
 
 
 if __name__ == '__main__':
-    recurse_generate()
+    #recurse_generate()
+    stat_check()
