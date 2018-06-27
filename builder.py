@@ -21,6 +21,9 @@ graph_edges = []
 def check_wins(current_state):
     wins = 0
     winner_set = set()
+    # 012
+    # 345
+    # 678
     if current_state[0] in {'U', 'T'}:
         # 3 states
         # *--
@@ -35,40 +38,35 @@ def check_wins(current_state):
             cat_wins += 1
         if cat_wins:
             wins += cat_wins
-            winner_set.add(current_state[4])
+            winner_set.add(current_state[0])
     if current_state[4] in {'U', 'T'}:
-        # The two diagonals could go here but I'm not sure that's better?
-        # It would make the branches more unbalanced.
-        # Generated states with multiple win states are less likely than others^[citation needed]
-        # Mmmmm I can't tell what that implies at 2:30 AM.
-        # Spreading it out more evenly... UHHHHH??????
-        # 2 states
-        #  |
+        # 3 states
+        #  |/
         # -*-
-        #  |
+        # /|
         cat_wins = 0
         if current_state[4] == current_state[3] and current_state[4] == current_state[5]:
             cat_wins += 1
         if current_state[4] == current_state[1] and current_state[4] == current_state[7]:
             cat_wins += 1
+        if current_state[4] == current_state[6] and current_state[4] == current_state[2]:
+            cat_wins += 1
         if cat_wins:
             wins += cat_wins
             winner_set.add(current_state[4])
     if current_state[8] in {'U', 'T'}:
-        # 3 states
-        # \ |
-        #  \|
+        # 2 states
+        #   |
+        #   |
         # --*
         cat_wins = 0
         if current_state[8] == current_state[7] and current_state[8] == current_state[6]:
             cat_wins += 1
         if current_state[8] == current_state[2] and current_state[8] == current_state[5]:
             cat_wins += 1
-        if current_state[8] == current_state[0] and current_state[8] == current_state[4]:
-            cat_wins += 1
         if cat_wins:
             wins += cat_wins
-            winner_set.add(current_state[4])
+            winner_set.add(current_state[8])
 
     return wins, winner_set
 
@@ -273,5 +271,5 @@ def node_generate():
 
 if __name__ == '__main__':
     #recurse_generate()
-    node_generate()
-    #stat_check()
+    #node_generate()
+    stat_check()
