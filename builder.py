@@ -227,7 +227,7 @@ def node_generate():
         # Anything that made it here is valid
 
         # RIGHT, current_state when iterated this way is a tuple of strings. WHOOPS.
-        # It can be used for keying the dict, but it makes things annoying later
+        # It can be used for keying, though, and lets us skip string stuff
         # That's fine for 90% of this
         state_str = ''.join(current_state)
         current_state_node = Node("Board", state=state_str)
@@ -236,10 +236,10 @@ def node_generate():
             # Properties can be added after the fact without messing up relationships, I checked!
             current_state_node['winner'] = winner
 
-        graph_nodes[state_str] = current_state_node
+        graph_nodes[current_state] = current_state_node
 
     print("Connecting nodes...")
-    # new progress bar, new total, uhhh 17335!
+    # new progress bar, new total, uhhh 17361!
     for current_state, current_state_node in progressbar.progressbar(graph_nodes.items()):
         # Look at all moves from this node, and add valid moves
 
@@ -252,8 +252,8 @@ def node_generate():
             # We need to generate len(next_moves)*2 new boards and check validity
             # if it's valid, make a connection
             for move in ['U', 'T']:
-                next_node = graph_nodes[current_state[0:new_move] + move + current_state[new_move + 1:]]
-                if check_wins(next_node)[0] <= 1:
+                next_node = graph_nodes.get(current_state[0:new_move] + (move,) + current_state[new_move + 1:], None)
+                if next_node:
                     # state is valid, add to edges
                     graph_edges.append(Relationship(current_state_node, "Move", next_node, who=move))
 
