@@ -15,19 +15,7 @@ graph_edges = []
 # But we'll avoid the hassle of talking back and forth with the db doing it this way
 
 
-# Strings are immutable, so woo hoo.
-# Replace elements with text[:1] + 'Z' + text[2:]
-def recurse_board(current_state, move, previous_state_node, init=False):
-    # Validate
-    # Check all win states, panic if we have more than one win and return
-
-    # 012
-    # 345
-    # 678
-
-    # I had 8 ifs but I forgot to account for blank spaces. I guess it's still 8 ifs.
-    # This should make it a little better, minor optimization. So much for across, down, and diagonal blocks.
-    # WHOOPS, need to know what side won if it's just one
+def check_wins(current_state):
     wins = 0
     winner_set = set()
     if current_state[0] in {'U', 'T'}:
@@ -78,6 +66,24 @@ def recurse_board(current_state, move, previous_state_node, init=False):
         if cat_wins:
             wins += cat_wins
             winner_set.add(current_state[4])
+
+    return wins, winner_set
+
+
+# Strings are immutable, so woo hoo.
+# Replace elements with text[:1] + 'Z' + text[2:]
+def recurse_board(current_state, move, previous_state_node, init=False):
+    # Validate
+    # Check all win states, panic if we have more than one win and return
+
+    # 012
+    # 345
+    # 678
+
+    # I had 8 ifs but I forgot to account for blank spaces. I guess it's still 8 ifs.
+    # This should make it a little better, minor optimization. So much for across, down, and diagonal blocks.
+    # WHOOPS, need to know what side won if it's just one
+    wins, winner_set = check_wins(current_state)
 
     # NO >:C
     if wins > 1:
@@ -131,8 +137,7 @@ def stat_check():
     states = itertools.product(' UT', repeat=9)
     total_wins, total_losses, total_ties, total_invalid, total = (0, 0, 0, 0, 3**9)
     for current_state in states:
-        wins = 0
-        winner_set = set()
+        wins, winner_set = check_wins(current_state)
         if current_state[0] in {'U', 'T'}:
             # 3 states
             # *--
