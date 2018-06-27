@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 from py2neo import Node, Graph, Relationship
 import itertools
 import progressbar
@@ -101,7 +103,7 @@ def DFS_recurse_board(current_state, move, previous_state_node, init=False):
 
     # Add to the node pile
     if current_state not in graph_nodes:
-        graph_nodes[current_state] = Node("Board")
+        graph_nodes[current_state] = Node("Board", state=current_state)
         if not len(graph_nodes) % 100:
             print(len(graph_nodes), 'nodes!')
     current_state_node = graph_nodes[current_state]
@@ -225,15 +227,17 @@ def node_generate():
         # No duplicate nodes this time!
         # Anything that made it here is valid
 
-        # Progress bar update here pls
-
-        current_state_node = Node("Board")
+        # RIGHT, current_state when iterated this way is a tuple of strings. WHOOPS.
+        # It can be used for keying the dict, but it makes things annoying later
+        # That's fine for 90% of this
+        state_str = ''.join(current_state)
+        current_state_node = Node("Board", state=state_str)
 
         if winner:
             # Properties can be added after the fact without messing up relationships, I checked!
             current_state_node['winner'] = winner
 
-        graph_nodes[current_state] = current_state_node
+        graph_nodes[state_str] = current_state_node
 
     print("Connecting nodes...")
     # new progress bar, new total, uhhh 17335!
@@ -250,7 +254,7 @@ def node_generate():
             # if it's valid, make a connection
             for move in ['U', 'T']:
                 next_node = graph_nodes[current_state[0:new_move] + move + current_state[new_move + 1:]]
-                if check_wins(new_node)[0] <= 1:
+                if check_wins(next_node)[0] <= 1:
                     # state is valid, add to edges
                     graph_edges.append(Relationship(current_state_node, "Move", next_node, who=move))
 
