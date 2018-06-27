@@ -47,24 +47,24 @@ def check_wins(current_state):
         # -*-
         #  |
         cat_wins = 0
-        if current_state[3] == current_state[4] and current_state[3] == current_state[5]:
+        if current_state[4] == current_state[3] and current_state[4] == current_state[5]:
             cat_wins += 1
-        if current_state[1] == current_state[4] and current_state[1] == current_state[7]:
+        if current_state[4] == current_state[1] and current_state[4] == current_state[7]:
             cat_wins += 1
         if cat_wins:
             wins += cat_wins
             winner_set.add(current_state[4])
-    if current_state[4] in {'U', 'T'}:
+    if current_state[8] in {'U', 'T'}:
         # 3 states
         # \ |
         #  \|
         # --*
         cat_wins = 0
-        if current_state[6] == current_state[7] and current_state[6] == current_state[8]:
+        if current_state[8] == current_state[7] and current_state[8] == current_state[6]:
             cat_wins += 1
-        if current_state[2] == current_state[5] and current_state[2] == current_state[8]:
+        if current_state[8] == current_state[2] and current_state[8] == current_state[5]:
             cat_wins += 1
-        if current_state[6] == current_state[4] and current_state[6] == current_state[2]:
+        if current_state[8] == current_state[0] and current_state[8] == current_state[4]:
             cat_wins += 1
         if cat_wins:
             wins += cat_wins
@@ -209,6 +209,7 @@ def node_generate():
     # progress bar 1 init here
     # 0 to 3**9
     for current_state in progressbar.progressbar(itertools.product(' UT', repeat=9), max_value=3 ** 9):
+
         wins, winner_set = check_wins(current_state)
 
         # NO >:C
@@ -271,5 +272,6 @@ def node_generate():
 
 
 if __name__ == '__main__':
-    #DFS_recurse_generate()
-    stat_check()
+    #recurse_generate()
+    node_generate()
+    #stat_check()
