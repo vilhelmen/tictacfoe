@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from py2neo import Node, Graph, Relationship
+from py2neo import Node, Graph, Relationship, Subgraph
 import itertools
 import progressbar
 # Maybe just use the raw neo4j library?
@@ -120,12 +120,13 @@ def DFS_recurse_board(current_state, move, previous_state_node, init=False):
 
     # Iterate through them, changing each piece to U, T and then back to ' ' and move to the next spot
     # (num of empty spaces also happens to be the inverse of piece total)
-    for new_move in move_list:
-        # new_move in the index of a space to modify
-        # We need to generate len(next_moves)*2 new boards and send them to the next level of processing
-        for x in ['U', 'T']:
-            # Thread these if init (But they'd probably have to be processes and uggghhhhh)
-            DFS_recurse_board(current_state[0:new_move] + x + current_state[new_move+1:], x, current_state)
+    if move_list:
+        for new_move in move_list:
+            # new_move in the index of a space to modify
+            # We need to generate len(next_moves)*2 new boards and send them to the next level of processing
+            for x in ['U', 'T']:
+                # Thread these if init (But they'd probably have to be processes and uggghhhhh)
+                DFS_recurse_board(current_state[0:new_move] + x + current_state[new_move+1:], x, current_state)
     else:
         # We didn't actually have any moves left, the board is full. No one wins.
         current_state_node['winner'] = 'N'
@@ -247,16 +248,16 @@ def node_generate():
         # Iterate through them, changing each piece to U or T
         # (num of empty spaces also happens to be the inverse of piece total, which is the level depth)
         move_list = [i for i, ltr in enumerate(current_state) if ltr == ' ']
-        for new_move in move_list:
-            # new_move in the index of a space to modify
-            # We need to generate len(next_moves)*2 new boards and check validity
-            # if it's valid, make a connection
-            for move in ['U', 'T']:
-                next_node = graph_nodes.get(current_state[0:new_move] + (move,) + current_state[new_move + 1:], None)
-                if next_node:
-                    # state is valid, add to edges
-                    graph_edges.append(Relationship(current_state_node, "Move", next_node, who=move))
-
+        if move_list:
+            for new_move in move_list:
+                # new_move in the index of a space to modify
+                # We need to generate len(next_moves)*2 new boards and check validity
+                # if it's valid, make a connection
+                for move in ['U', 'T']:
+                    next_node = graph_nodes.get(current_state[0:new_move] + (move,) + current_state[new_move + 1:], None)
+                    if next_node:
+                        # state is valid, add to edges
+                        graph_edges.append(Relationship(current_state_node, "Move", next_node, who=move))
         else:
             # Take this moment to detect ties, since this tells us that
             # We didn't actually have any moves left, the board is full. No one wins.
@@ -269,7 +270,22 @@ def node_generate():
     print(len(graph_nodes), "nodes and", len(graph_edges), "edges. Woooo")
 
 
+def db_feed():
+    g = Graph('bolt://neo4j:neo4j@localhost:7687')
+
+    # Just let me use the default docker credentials. Come on.
+    g.run("CALL dbms.changePassword('new password')")
+
+    g = Graph('bolt://neo4j:new password@localhost:7687')
+
+    graph = Subgraph(nodes=graph_nodes.items(), relationships=graph_edges)
+
+    g.create(graph)
+
+
 if __name__ == '__main__':
     #recurse_generate()
-    #node_generate()
-    stat_check()
+    node_generate()
+    #stat_check()
+
+    db_feed()
