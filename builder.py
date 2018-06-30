@@ -71,6 +71,45 @@ def check_wins(current_state):
     return wins, winner_set
 
 
+def prime_node_set(str_key=True):
+    # prepopulate node set
+    state_itr = itertools.product(' UT', repeat=9)
+
+    if str_key:
+        state_itr = map(lambda x: ''.join(x), state_itr)
+
+    state_itr = map(lambda x: (x, 9-x.count(' '), *check_wins(x)), state_itr)
+
+    total_wins, total_losses, total_ties, total_invalid, total_states = (0, 0, 0, 0, 3 ** 9)
+
+    # We could filter invalid nodes from the iterator, but it would mess with progress counts
+    for state, level, wins, winner in progressbar.progressbar(state_itr, max_value=3 ** 9):
+        # Invalid!
+        # Lol whoops, I wasn't respecting turn ordering. This threw out an additional 9000 states
+        if wins > 1 or abs(state.count('U') - state.count('T')) > 1:
+            total_invalid += 1
+            continue
+
+        new_node = Node("Board", state=state, level=level)
+
+        # 0 wins and not level 9 (or 0) indicates intermediary node, may be of use to know?
+        if wins == 0:
+            if level == 9:
+                total_ties += 1
+                new_node['winner'] = 'N'
+        else:
+            winner = next(iter(winner))
+            if winner == 'U':
+                total_wins += 1
+            else:
+                total_losses += 1
+            new_node['winner'] = winner
+
+        graph_nodes[state] = new_node
+
+    return total_wins, total_losses, total_ties, total_invalid, total_states
+
+
 # Strings are immutable, so woo hoo.
 # Replace elements with text[:1] + 'Z' + text[2:]
 def DFS_recurse_board(current_state, move, previous_state_node, init=False):
@@ -81,37 +120,15 @@ def DFS_recurse_board(current_state, move, previous_state_node, init=False):
     # 345
     # 678
 
-    # I had 8 ifs but I forgot to account for blank spaces. I guess it's still 8 ifs.
-    # This should make it a little better, minor optimization. So much for across, down, and diagonal blocks.
-    # WHOOPS, need to know what side won if it's just one
-    wins, winner_set = check_wins(current_state)
-
-    # NO >:C
-    if wins > 1:
-        return
-    elif wins == 1:
-        winner = next(iter(winner_set))
-    else:
-        winner = None
-
-    # At this point, we have our board, and we know it's valid.
-    # We also know if it's a winner.
-    # If it's a winner, we should insert it and end.
-    # If it's not, we should insert our current state, plan our next moves, and iterate on them.
-
-    # Add to the node pile
-    if current_state not in graph_nodes:
-        graph_nodes[current_state] = Node("Board", state=current_state)
-        if not len(graph_nodes) % 100:
-            print(len(graph_nodes), 'nodes!')
+    # the node set has already been primed, and we validated before calling. Load node and plot next moves
     current_state_node = graph_nodes[current_state]
+
     # If we're not the first board, we have a parent board.
     if not init:
         graph_edges.append(Relationship(previous_state_node, "Move", current_state_node, who=move))
 
-    if winner:
-        # Properties can be added after the fact without messing up relationships, I checked!
-        current_state_node['winner'] = winner
+    # we're good, move on to another path
+    if 'winner' in current_state_node:
         return
 
     # Get indices of empty spaces. this could be passed in. We'd have to watch for edits, or just use slices!
@@ -120,24 +137,20 @@ def DFS_recurse_board(current_state, move, previous_state_node, init=False):
 
     # Iterate through them, changing each piece to U, T and then back to ' ' and move to the next spot
     # (num of empty spaces also happens to be the inverse of piece total)
-    if move_list:
-        for new_move in move_list:
-            # new_move in the index of a space to modify
-            # We need to generate len(next_moves)*2 new boards and send them to the next level of processing
-            for x in ['U', 'T']:
-                # Thread these if init (But they'd probably have to be processes and uggghhhhh)
-                DFS_recurse_board(current_state[0:new_move] + x + current_state[new_move+1:], x, current_state)
-    else:
-        # We didn't actually have any moves left, the board is full. No one wins.
-        current_state_node['winner'] = 'N'
-
-    # I'm curious. We could make the DB compute this, but this is easier for everyone involved.
-    current_state_node['level'] = 9 - len(move_list)
+    for new_move in move_list:
+        # new_move in the index of a space to modify
+        # We need to generate len(next_moves)*2 new boards and send them to the next level of processing
+        for x in ['U', 'T']:
+            # Thread these if init (But they'd probably have to be processes and uggghhhhh)
+            new_state = current_state[0:new_move] + x + current_state[new_move+1:]
+            # This prevents unnecessary recursions. A boon to the 95 minute runtime.
+            if new_state in graph_nodes:
+                DFS_recurse_board(new_state, x, current_state)
 
     return
 
 
-def recurse_generate():
+def DFS_recurse_generate():
     # Need a converter, board->id and back
 
     # Reduce across columns and rows for each, etc, etc.
@@ -168,6 +181,9 @@ def recurse_generate():
     # That seems like an edit distance problem, though.
     # The generator is so easy though...
 
+    print("Priming node cache")
+    prime_node_set()
+
     print("Launching DFS build!")
 
     DFS_recurse_board("         ", "???", "?????????", True)
@@ -176,68 +192,48 @@ def recurse_generate():
     print(len(graph_nodes), "nodes and", len(graph_edges), "edges. Woooo")
 
 
+def BFS_recurse_board(node_layer):
+    # extremely gentler on recursion depth than DFS
+    new_layer = []
+    for n in node_layer:
+        current_state = n['state']
+        move_list = [i for i, ltr in enumerate(current_state) if ltr == ' ']
+
+        # Iterate through them, changing each piece to U, T and then back to ' ' and move to the next spot
+        # (num of empty spaces also happens to be the inverse of piece total)
+        for new_move in move_list:
+            # if the next node is good, add it to the next layer and build a link
+            for x in ['U', 'T']:
+                next_state = current_state[0:new_move] + x + current_state[new_move + 1:]
+                if next_state in graph_nodes:
+                    next_node = graph_nodes[next_state]
+                    graph_edges.append(Relationship(n, "Move", next_node, who=move))
+                    new_layer.append(next_node)
+
+
+def BFS_recurse_generate():
+    print("Priming node cache")
+    prime_node_set()
+
+    print("Launching BFS build!")
+
+    BFS_recurse_board([graph_nodes['         ']])
+
+    print("Done processing! (??)")
+    print(len(graph_nodes), "nodes and", len(graph_edges), "edges. Woooo")
+
+
 def stat_check():
     # Run through all states as a sanity check
-    states = itertools.product(' UT', repeat=9)
-    total_wins, total_losses, total_ties, total_invalid, total = (0, 0, 0, 0, 3**9)
-    for current_state in states:
-        wins, winner_set = check_wins(current_state)
-
-        if wins == 0:
-            if ' ' not in current_state:
-                total_ties += 1
-        elif wins == 1:
-            if 'U' in winner_set:
-                total_wins += 1
-            else:
-                total_losses += 1
-        else:
-            total_invalid += 1
-
-    print(total_wins, total_losses, total_ties, total_invalid, total)
-    return total_wins, total_losses, total_ties, total_invalid, total
+    print(prime_node_set())
 
 
 def node_generate():
     # node generation method.
     # Instead of running DFS from the root, this generates all nodes and all moves out from them
-    # Should be no faster, but avoids large gaps of no visible progress.
-    # So it's really just a placebo
     print("Computing move space...")
 
-    # progress bar 1 init here
-    # 0 to 3**9
-    for current_state in progressbar.progressbar(itertools.product(' UT', repeat=9), max_value=3 ** 9):
-
-        wins, winner_set = check_wins(current_state)
-
-        # NO >:C
-        if wins > 1:
-            continue
-        elif wins == 1:
-            winner = next(iter(winner_set))
-        else:
-            winner = None
-
-        # At this point, we have our board, and we know it's valid.
-        # We also know if it's a winner.
-        # If it's a winner, we should insert it and end.
-        # If it's not, we should insert our current state, plan our next moves, and iterate on them.
-
-        # No duplicate nodes this time!
-        # Anything that made it here is valid
-
-        # RIGHT, current_state when iterated this way is a tuple of strings. WHOOPS.
-        # It can be used for keying, though, and lets us skip string stuff
-        # That's fine for 90% of this
-        state_str = ''.join(current_state)
-        current_state_node = Node("Board", state=state_str)
-
-        if winner:
-            # Properties can be added after the fact without messing up relationships, I checked!
-            current_state_node['winner'] = winner
-
-        graph_nodes[current_state] = current_state_node
+    prime_node_set()
 
     print("Connecting nodes...")
     # new progress bar, new total, uhhh 17361!
@@ -248,23 +244,15 @@ def node_generate():
         # Iterate through them, changing each piece to U or T
         # (num of empty spaces also happens to be the inverse of piece total, which is the level depth)
         move_list = [i for i, ltr in enumerate(current_state) if ltr == ' ']
-        if move_list:
-            for new_move in move_list:
-                # new_move in the index of a space to modify
-                # We need to generate len(next_moves)*2 new boards and check validity
-                # if it's valid, make a connection
-                for move in ['U', 'T']:
-                    next_node = graph_nodes.get(current_state[0:new_move] + (move,) + current_state[new_move + 1:], None)
-                    if next_node:
-                        # state is valid, add to edges
-                        graph_edges.append(Relationship(current_state_node, "Move", next_node, who=move))
-        else:
-            # Take this moment to detect ties, since this tells us that
-            # We didn't actually have any moves left, the board is full. No one wins.
-            current_state_node['winner'] = 'N'
-
-        # I'm curious. We could make the DB compute this, but this is easier for everyone involved.
-        current_state_node['level'] = 9 - len(move_list)
+        for new_move in move_list:
+            # new_move in the index of a space to modify
+            # We need to generate len(next_moves)*2 new boards and check validity
+            # if it's valid, make a connection
+            for move in ['U', 'T']:
+                next_node = graph_nodes.get(current_state[0:new_move] + move + current_state[new_move + 1:])
+                if next_node:
+                    # state is valid, add to edges
+                    graph_edges.append(Relationship(current_state_node, "Move", next_node, who=move))
 
     print("Done processing!")
     print(len(graph_nodes), "nodes and", len(graph_edges), "edges. Woooo")
@@ -284,8 +272,8 @@ def db_feed():
 
 
 if __name__ == '__main__':
-    #recurse_generate()
-    node_generate()
-    #stat_check()
-
-    db_feed()
+    #DFS_recurse_generate()
+    #node_generate()
+    stat_check()
+    #prime_node_set()
+    #db_feed()
