@@ -194,8 +194,8 @@ def DFS_recurse_generate():
 
 def BFS_recurse_board(node_layer):
     # extremely gentler on recursion depth than DFS
-    new_layer = []
-    for n in node_layer:
+    new_layer = {}
+    for n in progressbar.progressbar(node_layer):
         current_state = n['state']
         move_list = [i for i, ltr in enumerate(current_state) if ltr == ' ']
 
@@ -207,8 +207,12 @@ def BFS_recurse_board(node_layer):
                 next_state = current_state[0:new_move] + x + current_state[new_move + 1:]
                 if next_state in graph_nodes:
                     next_node = graph_nodes[next_state]
-                    graph_edges.append(Relationship(n, "Move", next_node, who=move))
-                    new_layer.append(next_node)
+                    graph_edges.append(Relationship(n, "Move", next_node, who=x))
+                    new_layer[next_state] = next_node
+
+    if new_layer:
+        print('Recursing...')
+        return BFS_recurse_board(new_layer.values())
 
 
 def BFS_recurse_generate():
@@ -273,6 +277,7 @@ def db_feed():
 
 if __name__ == '__main__':
     #DFS_recurse_generate()
+    #BFS_recurse_generate()
     #node_generate()
     stat_check()
     #prime_node_set()
