@@ -145,7 +145,7 @@ def DFS_recurse_board(current_state, move, previous_state_node, init=False):
             new_state = current_state[0:new_move] + x + current_state[new_move+1:]
             # This prevents unnecessary recursions. A boon to the 95 minute runtime.
             if new_state in graph_nodes:
-                DFS_recurse_board(new_state, x, current_state)
+                DFS_recurse_board(new_state, x, current_state_node)
 
     return
 
