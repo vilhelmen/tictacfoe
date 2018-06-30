@@ -275,10 +275,18 @@ def db_feed():
     g.create(graph)
 
 
+def debug_dump():
+    with open('state_edges.txt', 'w') as se, open('full_edges.txt', 'w') as fe:
+        for edge in graph_edges:
+            se.write(edge.start_node['state'] + '->' + edge.end_node['state'] + '\n')
+            fe.write(str(edge) + '\n')
+
+
 if __name__ == '__main__':
-    #DFS_recurse_generate()
+    DFS_recurse_generate()
     #BFS_recurse_generate()
     #node_generate()
-    stat_check()
+    #stat_check()
     #prime_node_set()
+    debug_dump()
     #db_feed()
