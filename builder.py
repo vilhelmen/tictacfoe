@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
-from py2neo import Node, Graph, Relationship, Subgraph
+from py2neo import Node, Graph, Relationship, Subgraph, Schema
 import itertools
-import progressbar
+from tqdm import tqdm
+import sys
 # Maybe just use the raw neo4j library?
 
 
@@ -83,7 +84,7 @@ def prime_node_set(str_key=True):
     total_wins, total_losses, total_ties, total_invalid, total_states = (0, 0, 0, 0, 3 ** 9)
 
     # We could filter invalid nodes from the iterator, but it would mess with progress counts
-    for state, level, wins, winner in progressbar.progressbar(state_itr, max_value=3 ** 9):
+    for state, level, wins, winner in tqdm(state_itr, total=3 ** 9, unit='Nodes'):
         # Invalid!
         # Lol whoops, I wasn't respecting turn ordering. This threw out an additional 9000 states
         if wins > 1 or abs(state.count('U') - state.count('T')) > 1:
@@ -195,7 +196,7 @@ def DFS_recurse_generate():
 def BFS_recurse_board(node_layer):
     # extremely gentler on recursion depth than DFS
     new_layer = {}
-    for n in progressbar.progressbar(node_layer):
+    for n in tqdm(node_layer, unit='Nodes'):
         current_state = n['state']
         move_list = [i for i, ltr in enumerate(current_state) if ltr == ' ']
 
@@ -241,7 +242,7 @@ def node_generate():
 
     print("Connecting nodes...")
     # new progress bar, new total, uhhh 17361!
-    for current_state, current_state_node in progressbar.progressbar(graph_nodes.items()):
+    for current_state, current_state_node in tqdm(graph_nodes.items(), unit='Nodes'):
         # Look at all moves from this node, and add valid moves
 
         # Get indices of empty spaces.
@@ -262,17 +263,52 @@ def node_generate():
     print(len(graph_nodes), "nodes and", len(graph_edges), "edges. Woooo")
 
 
-def db_feed():
-    g = Graph('bolt://neo4j:neo4j@localhost:7687')
+def db_feed(bolt_url=None):
+    if bolt_url:
+        g = Graph(bolt_url)
+    else:
+        g = Graph('bolt://neo4j:neo4j@localhost:7687')
 
-    # Just let me use the default docker credentials. Come on.
-    g.run("CALL dbms.changePassword('new password')")
+        # Just let me use the default docker credentials. Come on.
+        g.run("CALL dbms.changePassword('new password')")
 
-    g = Graph('bolt://neo4j:new password@localhost:7687')
+        g = Graph('bolt://neo4j:new password@localhost:7687')
 
-    graph = Subgraph(nodes=graph_nodes.items(), relationships=graph_edges)
+    print('Tossing old data...')
+    g.delete_all()
 
+    # This feels super slow, let's iterate and push. within a transaction
+    graph = Subgraph(nodes=graph_nodes.values(), relationships=graph_edges)
+    print('Pushing graph...')
+    # I'd really like some sort of progress meter here
+    # Could run create in a separate thread, iterate on calling join with a timeout
+    # Each iter ticks the bar more
     g.create(graph)
+    # nodes and edges are now bound to their server copies
+
+    s = g.schema
+
+    print('Building constraints...')
+    # Constraint implies an index, BUT an indexed term cannot have a constraint created
+    # So this has to go first
+    for x in {"state"} - {x[0] for x in s.create_uniqueness_constraint("Board")}:
+        s.create_uniqueness_constraint("Board", x)
+
+    # Technically we're just scheduling them
+    print('Building indices...')
+    for x in {"winner", "level"} - {x[0] for x in s.get_indexes("Board")}:
+        s.create_index("Board", x)
+
+    for x in {"who"} - {x[0] for x in s.get_indexes("Move")}:
+        s.create_index("Move", x)
+
+    print('Checking totals...')
+    server_nodes = g.run('MATCH (n:Board) RETURN count(n)').evaluate()
+    server_edges = g.run('MATCH (:Board)-[r:Move]->(:Board) RETURN count(r)').evaluate()
+    print("Server has", server_nodes, "and", server_edges, "edges.")
+
+    print('Done!')
+    return
 
 
 def debug_dump():
@@ -283,10 +319,11 @@ def debug_dump():
 
 
 if __name__ == '__main__':
-    DFS_recurse_generate()
+    #DFS_recurse_generate()
     #BFS_recurse_generate()
-    #node_generate()
+    node_generate()
     #stat_check()
     #prime_node_set()
-    debug_dump()
-    #db_feed()
+    #debug_dump()
+
+    db_feed(sys.argv[1] if len(sys.argv) > 1 else None)
