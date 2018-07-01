@@ -291,7 +291,7 @@ def db_feed(bolt_url=None):
     print('Building constraints...')
     # Constraint implies an index, BUT an indexed term cannot have a constraint created
     # So this has to go first
-    for x in {"state"} - {x[0] for x in s.create_uniqueness_constraint("Board")}:
+    for x in {"state"} - {x[0] for x in s.get_uniqueness_constraints("Board")}:
         s.create_uniqueness_constraint("Board", x)
 
     # Technically we're just scheduling them
