@@ -113,7 +113,7 @@ def prime_node_set(str_key=True):
 
 # Strings are immutable, so woo hoo.
 # Replace elements with text[:1] + 'Z' + text[2:]
-def DFS_recurse_board(current_state, move, previous_state_node, init=False):
+def DFS_recurse_board(current_state, move, where, previous_state_node, init=False):
     # Validate
     # Check all win states, panic if we have more than one win and return
 
@@ -126,7 +126,7 @@ def DFS_recurse_board(current_state, move, previous_state_node, init=False):
 
     # If we're not the first board, we have a parent board.
     if not init:
-        graph_edges.append(Relationship(previous_state_node, "Move", current_state_node, who=move))
+        graph_edges.append(Relationship(previous_state_node, "Move", current_state_node, who=move, where=where))
 
     # we're good, move on to another path
     if 'winner' in current_state_node:
@@ -146,7 +146,7 @@ def DFS_recurse_board(current_state, move, previous_state_node, init=False):
             new_state = current_state[0:new_move] + x + current_state[new_move+1:]
             # This prevents unnecessary recursions. A boon to the 95 minute runtime.
             if new_state in graph_nodes:
-                DFS_recurse_board(new_state, x, current_state_node)
+                DFS_recurse_board(new_state, x, new_move, current_state_node)
 
     return
 
@@ -187,7 +187,7 @@ def DFS_recurse_generate():
 
     print("Launching DFS build!")
 
-    DFS_recurse_board("         ", "???", "?????????", True)
+    DFS_recurse_board("         ", "???", "???", "?????????", True)
 
     print("Done processing! (??)")
     print(len(graph_nodes), "nodes and", len(graph_edges), "edges. Woooo")
@@ -208,7 +208,7 @@ def BFS_recurse_board(node_layer):
                 next_state = current_state[0:new_move] + x + current_state[new_move + 1:]
                 if next_state in graph_nodes:
                     next_node = graph_nodes[next_state]
-                    graph_edges.append(Relationship(n, "Move", next_node, who=x))
+                    graph_edges.append(Relationship(n, "Move", next_node, who=x, where=new_move))
                     new_layer[next_state] = next_node
 
     if new_layer:
@@ -257,7 +257,7 @@ def node_generate():
                 next_node = graph_nodes.get(current_state[0:new_move] + move + current_state[new_move + 1:])
                 if next_node:
                     # state is valid, add to edges
-                    graph_edges.append(Relationship(current_state_node, "Move", next_node, who=move))
+                    graph_edges.append(Relationship(current_state_node, "Move", next_node, who=move, where=new_move))
 
     print("Done processing!")
     print(len(graph_nodes), "nodes and", len(graph_edges), "edges. Woooo")
@@ -299,7 +299,8 @@ def db_feed(bolt_url=None):
     for x in {"winner", "level"} - {x[0] for x in s.get_indexes("Board")}:
         s.create_index("Board", x)
 
-    for x in {"who"} - {x[0] for x in s.get_indexes("Move")}:
+    # I can't imagine these are useful but why not
+    for x in {"who", "where"} - {x[0] for x in s.get_indexes("Move")}:
         s.create_index("Move", x)
 
     print('Checking totals...')
@@ -309,6 +310,42 @@ def db_feed(bolt_url=None):
 
     print('Done!')
     return
+
+
+def db_process(bolt_url=None):
+    if bolt_url:
+        g = Graph(bolt_url)
+    else:
+        g = Graph('bolt://neo4j:neo4j@localhost:7687')
+
+    # Data more easily computed by the db than us (ideally...)
+
+    # Ideas:
+    # move vector at each node pointing towards best move(s) (most wins, shortest path, fewer losses??)
+    #  maximize win/loss ratio shortest path? Just ratio?
+    # Count win nodes user current node. Same with loss?
+
+    # This could be done during DFS but that's so slow
+    tx = g.begin()
+    # Potential
+    # Is a tie a win or a loss? Ignore it?
+    # a tie is better than a loss, but not something we should aim for.
+    tx.run("""
+    MATCH (n:Board)-[*]->(m:Board)
+    WHERE EXISTS(m.winner)
+    WITH n, COLLECT(DISTINCT m) as m
+    WITH n, SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'U']) as win_points, 
+        SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'T']) as loss_points
+
+        SET n.potential = CASE IF LOSS IS ZERO BECAUSE NEO4J DOESN'T INF BECASUE UGGHHHH
+    """)
+    # All nodes in level 9 are leaves, so skip it(?)
+    tx.run("""
+    UNWIND [8, 7, 6, 5, 4, 3, 2, 1, 0] as layer_no
+        MATCH (n:Board {layer: layer_no})
+        WHERE NOT EXISTS(n.winner)
+        WITH COLLECT(n) as 
+    """)
 
 
 def debug_dump():
@@ -327,3 +364,5 @@ if __name__ == '__main__':
     #debug_dump()
 
     db_feed(sys.argv[1] if len(sys.argv) > 1 else None)
+
+    # db_process(sys.argv[1] if len(sys.argv) > 1 else None)
