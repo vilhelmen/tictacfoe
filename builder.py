@@ -2,7 +2,7 @@
 
 from py2neo import Node, Graph, Relationship, Subgraph, Schema
 import itertools
-from tqdm import tqdm
+import progressbar
 import sys
 # Maybe just use the raw neo4j library?
 
@@ -84,7 +84,7 @@ def prime_node_set(str_key=True):
     total_wins, total_losses, total_ties, total_invalid, total_states = (0, 0, 0, 0, 3 ** 9)
 
     # We could filter invalid nodes from the iterator, but it would mess with progress counts
-    for state, level, wins, winner in tqdm(state_itr, total=3 ** 9, unit='Nodes'):
+    for state, level, wins, winner in progressbar.progressbar(state_itr, max_value=3 ** 9):
         # Invalid!
         # Lol whoops, I wasn't respecting turn ordering. This threw out an additional 9000 states
         if wins > 1 or abs(state.count('U') - state.count('T')) > 1:
@@ -196,7 +196,7 @@ def DFS_recurse_generate():
 def BFS_recurse_board(node_layer):
     # extremely gentler on recursion depth than DFS
     new_layer = {}
-    for n in tqdm(node_layer, unit='Nodes'):
+    for n in progressbar.progressbar(node_layer):
         current_state = n['state']
         move_list = [i for i, ltr in enumerate(current_state) if ltr == ' ']
 
@@ -242,7 +242,7 @@ def node_generate():
 
     print("Connecting nodes...")
     # new progress bar, new total, uhhh 17361!
-    for current_state, current_state_node in tqdm(graph_nodes.items(), unit='Nodes'):
+    for current_state, current_state_node in progressbar.progressbar(graph_nodes.items()):
         # Look at all moves from this node, and add valid moves
 
         # Get indices of empty spaces.
@@ -330,6 +330,7 @@ def db_process(bolt_url=None):
     # Potential
     # Is a tie a win or a loss? Ignore it?
     # a tie is better than a loss, but not something we should aim for.
+    # peggy_hill_hoo_yeah.wav works first time
     tx.run("""
     MATCH (n:Board)-[*]->(m:Board)
     WHERE EXISTS(m.winner)
@@ -337,7 +338,7 @@ def db_process(bolt_url=None):
     WITH n, SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'U']) as win_points, 
         SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'T']) as loss_points
 
-        SET n.potential = CASE IF LOSS IS ZERO BECAUSE NEO4J DOESN'T INF BECASUE UGGHHHH
+        SET n.potential = CASE loss_points WHEN 0 THEN 9999 ELSE win_points/loss_points END
     """)
     # All nodes in level 9 are leaves, so skip it(?)
     tx.run("""
