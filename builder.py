@@ -98,19 +98,35 @@ def prime_node_set(str_key=True):
         new_node = Node("Board", state=state, level=level)
 
         # 0 wins and not level 9 (or 0) indicates intermediary node, may be of use to know?
+
+        # Idea: marking all leaves as End nodes. Then another label for Win/Loss/Tie.
+        #  Easier search than where exists(n.winner). It doesn't HURT to have it, right?
+        #  Also mark intermediary nodes. The root board is marked intermediary, and that technically isn't correct
         if wins == 0:
             if level == 9:
                 total_ties += 1
                 new_node['winner'] = 'N'
+                new_node.add_label("Tie")
+            else:
+                new_node.add_label("Intermediary")
         else:
             winner = next(iter(winner))
             if winner == 'U':
                 total_wins += 1
+                new_node.add_label("Win")
             else:
                 total_losses += 1
+                new_node.add_label("Loss")
             new_node['winner'] = winner
+            new_node.add_label("End")
 
         graph_nodes[state] = new_node
+
+    # Ugh, either I fix it here or add another if to the generator that is only used once :/
+    # I think i changed my mind. I like nodes being either intermediary or end states, I think.
+    # Having Start doesn't hurt, I guess.
+    # graph_nodes['         '].remove_label("Intermediary")
+    graph_nodes['         '].add_label("Start")
 
     return total_wins, total_losses, total_ties, total_invalid, total_states
 
@@ -325,6 +341,8 @@ def db_feed(bolt_url=None):
     for x in {"winner", "level"} - {x[0] for x in s.get_indexes("Board")}:
         s.create_index("Board", x)
 
+    # Indices for Intermediary, Win, Loss, Tie, End, Start???? EHHH??
+
     # I can't imagine these are useful but why not
     for x in {"who", "where"} - {x[0] for x in s.get_indexes("Move")}:
         s.create_index("Move", x)
@@ -351,6 +369,10 @@ def db_process(bolt_url=None):
     #  maximize win/loss ratio shortest path? Just ratio?
     # Count win nodes user current node. Same with loss?
 
+    # I think I like gathering potential of descendants, ordering by potential, and selecting from that list
+    # Hard could be first third, medium, middle third, easy, last third.
+    # Easy might just be actively bad, though
+
     # This could be done during DFS but that's so slow
     # Potential
     # Is a tie a win or a loss? Ignore it?
@@ -359,6 +381,81 @@ def db_process(bolt_url=None):
     # peggy_hill_hoo_yeah.wav works first time
     print('Computing node potential...')
     tx = g.begin()
+
+    # Collect direct descendant winner/loser id lists
+    # levels 0, 1, 2, 3, and 9 do not have winner descendants (first winner is level 5, 9 is only leaves)
+
+    # Loop through levels, direction doesn't matter
+    # Find direct end state children
+    # Collect winner/loser ids
+    # Replace nulls with [] ([1,2,3] + null = null >:C and this ruins everything later)
+    # Assign
+    tx.run("""
+            UNWIND [8, 7, 6, 5, 4] as level_no
+            MATCH (n:Board:Intermediary {level: level_no})-->(m:Board:End)
+            WITH n, COLLECT(m) as m
+            WITH n, [x IN m WHERE x.winner = 'U' | id(x)] AS winner_children, 
+                [x IN m WHERE x.winner = 'T' | id(x)] AS loser_children
+
+            SET n.win_list = CASE WHEN winner_children IS NULL THEN [] ELSE winner_children END, 
+                n.lose_list = CASE WHEN loser_children IS NULL THEN [] ELSE loser_children END
+            """)
+
+    # UGH NULLS. Intermediaries without direct connections to End nodes will null it up later
+    # Just give everyone empty lists if they don't have something already. They'll be deleted anyway.
+    tx.run("""MATCH (n:Board:Intermediary) WHERE NOT EXISTS (n.win_list) SET n.win_list = []""")
+    tx.run("""MATCH (n:Board:Intermediary) WHERE NOT EXISTS (n.lose_list) SET n.lose_list = []""")
+
+    # Now merge them upwards
+
+    # Ok. This is a long one.
+    # Loop through the relevant levels
+    # Get the intermediary nodes below each node in the current layer
+    # Get the current level node and collect the nodes below it
+    #  Flatten the lose_lists from children
+    #  Repeat with win_lists
+    # Unwind the lists, combine them with our current node's lists and dedupe them
+    # Grab the deduped list sizes
+    # Save them lists and compute ratio.
+
+    # Ok, for some reason this unwind is not working, like it's going backwards maybe?
+    # Or maybe just doing one iteration >:C
+    # Doing this manually, it really chugs at levels 3 and up since these lists are obnoxiously large
+    # I tried. Will revert to direct computation :/
+    tx.run("""
+            UNWIND [7, 6, 5, 4, 3, 2, 1, 0] as level_no
+            MATCH (n:Board:Intermediary {level: level_no})-->(m:Board:Intermediary)
+            WITH n, COLLECT(m) AS m
+            WITH n,
+                REDUCE(l = [], x IN m | l + x.lose_list) AS flattened_losers,
+                REDUCE(l = [], x IN m | l + x.win_list) AS flattened_winners
+            UNWIND n.lose_list + flattened_losers AS new_losers
+            UNWIND n.win_list + flattened_winners AS new_winners
+            WITH n, COLLECT(DISTINCT new_losers) AS new_lose_list, COLLECT(DISTINCT new_winners) AS new_win_list
+            WITH n, new_lose_list, SIZE(new_lose_list) as total_losers, new_win_list, SIZE(new_win_list) as total_winners
+            SET n.lose_list = new_lose_list, n.win_list = new_win_list,
+                n.potential = CASE total_losers WHEN 0 THEN 9999 ELSE toFloat(total_winners)/total_losers END
+            """)
+
+    # Tabulate and toss intermediate data
+
+    tx.run("""
+            MATCH (n:Board:Intermediary)
+            
+            """)
+
+    for level_no in progressbar.progressbar([8, 7, 6, 5, 4, 3, 2, 1, 0]):
+        # Attempt at a bottom-up build for faster computation
+        # {{ to escape for format()
+        tx.run("""
+            MATCH (n:Board:Intermediary {{level: {level_no}}})-->(m:Board:)
+            WITH n, COLLECT(DISTINCT m) as m
+            WITH n, [x IN m WHERE exists(x.winner) AND x.winner = 'U' | x.state] as winner_children, 
+                [x IN m WHERE exists(x.winner) AND x.winner = 'T' | x.state] as loser_children
+
+                SET n.win_list = winner_children, n.lose_list = loser_children
+            """.format(level_no=cypher_repr(level_no)))
+'''
     for level_no in progressbar.progressbar([0, 1, 2, 3, 4, 5, 6, 7, 8]):
         # Layer 9 has no potential (it's terminal) so we'll skip it
         # Also, layer 0 is just the initial board, which should be 0.5
@@ -376,6 +473,7 @@ def db_process(bolt_url=None):
 
                 SET n.potential = CASE loss_points WHEN 0 THEN 9999 ELSE win_points/loss_points END
             """.format(level_no=cypher_repr(level_no)))
+
     print('Commit.')
     tx.commit()
 
@@ -394,6 +492,7 @@ def db_process(bolt_url=None):
 
     print('Done!')
     return
+'''
 
 
 def debug_dump():
@@ -413,4 +512,4 @@ if __name__ == '__main__':
 
     db_feed(sys.argv[1] if len(sys.argv) > 1 else None)
 
-    db_process(sys.argv[1] if len(sys.argv) > 1 else None)
+    # db_process(sys.argv[1] if len(sys.argv) > 1 else None)
