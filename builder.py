@@ -5,7 +5,7 @@ import math
 import sys
 
 import progressbar
-from py2neo import Node, Graph, Relationship, Subgraph, cypher_escape
+from py2neo import Node, Graph, Relationship, Subgraph, cypher_escape, cypher_repr
 
 # Maybe just use the raw neo4j library?
 
@@ -304,7 +304,7 @@ def db_feed(bolt_url=None):
 
     print('Pushing edges...')
     tx = g.begin()
-    for chunk in progressbar.progressbar(grouper(graph_edges, math.ceil(len(graph_edges) / 10)), max_value=10):
+    for chunk in progressbar.progressbar(grouper(graph_edges, math.ceil(len(graph_edges) / 20)), max_value=20):
         subg = Subgraph(relationships=chunk)
         tx.create(subg)
     print('Commit.')
@@ -359,7 +359,7 @@ def db_process(bolt_url=None):
     # peggy_hill_hoo_yeah.wav works first time
     print('Computing node potential...')
     tx = g.begin()
-    for layer_no in progressbar.progressbar([8, 7, 6, 5, 4, 3, 2, 1, 0]):
+    for level_no in progressbar.progressbar([0, 1, 2, 3, 4, 5, 6, 7, 8]):
         # Layer 9 has no potential (it's terminal) so we'll skip it
         # Also, layer 0 is just the initial board, which should be 0.5
         # It could be skipped since there's no value to gain from layer 0 stats, or hardcoded
@@ -369,13 +369,13 @@ def db_process(bolt_url=None):
         #  storing intermediary win/loss lists in the nodes and combining and deduping them at each higher layer
         # May be worthwhile. May not. Let's see how long this takes to compute.
         tx.run("""
-            MATCH (n:Board {layer: {layer_no})-[*]->(m:Board) WHERE EXISTS(m.winner)
+            MATCH (n:Board)-[*]->(m:Board) WHERE n.level = {level_no} AND EXISTS(m.winner)
             WITH n, COLLECT(DISTINCT m) as m
             WITH n, SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'U']) as win_points, 
                 SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'T']) as loss_points
 
                 SET n.potential = CASE loss_points WHEN 0 THEN 9999 ELSE win_points/loss_points END
-            """.format(layer_no=cypher_escape(layer_no)))
+            """.format(level_no=cypher_repr(level_no)))
     print('Commit.')
     tx.commit()
 
@@ -387,9 +387,9 @@ def db_process(bolt_url=None):
     print('Evaluating potential...')
     # Change to accumulate 9999s to a separate list and count them
     print(g.run("""
-    UNWIND [0, 1, 2, 3, 4, 5, 6, 7, 8] as layer_no
-    MATCH (n:Board {layer: layer_no}) WHERE EXISTS(n.potential) AND n.potential <> 9999
-    RETURN layer_no, min(n.potential), avg(n.potential), max(n.potential)
+    UNWIND [0, 1, 2, 3, 4, 5, 6, 7, 8] as level_no
+    MATCH (n:Board {level: level_no}) WHERE EXISTS(n.potential) AND n.potential <> 9999
+    RETURN level_no, min(n.potential), avg(n.potential), max(n.potential)
     """).to_table())
 
     print('Done!')
@@ -413,4 +413,4 @@ if __name__ == '__main__':
 
     db_feed(sys.argv[1] if len(sys.argv) > 1 else None)
 
-    # db_process(sys.argv[1] if len(sys.argv) > 1 else None)
+    db_process(sys.argv[1] if len(sys.argv) > 1 else None)
