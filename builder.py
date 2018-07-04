@@ -356,7 +356,7 @@ def db_feed(bolt_url=None):
     return
 
 
-def db_process(bolt_url=None):
+def db_post_process(bolt_url=None):
     if bolt_url:
         g = Graph(bolt_url)
     else:
@@ -382,96 +382,18 @@ def db_process(bolt_url=None):
     print('Computing node potential...')
     tx = g.begin()
 
-    # Collect direct descendant winner/loser id lists
-    # levels 0, 1, 2, 3, and 9 do not have winner descendants (first winner is level 5, 9 is only leaves)
-
-    # Loop through levels, direction doesn't matter
-    # Find direct end state children
-    # Collect winner/loser ids
-    # Replace nulls with [] ([1,2,3] + null = null >:C and this ruins everything later)
-    # Assign
-    tx.run("""
-            UNWIND [8, 7, 6, 5, 4] as level_no
-            MATCH (n:Board:Intermediary {level: level_no})-->(m:Board:End)
-            WITH n, COLLECT(m) as m
-            WITH n, [x IN m WHERE x.winner = 'U' | id(x)] AS winner_children, 
-                [x IN m WHERE x.winner = 'T' | id(x)] AS loser_children
-
-            SET n.win_list = CASE WHEN winner_children IS NULL THEN [] ELSE winner_children END, 
-                n.lose_list = CASE WHEN loser_children IS NULL THEN [] ELSE loser_children END
-            """)
-
-    # UGH NULLS. Intermediaries without direct connections to End nodes will null it up later
-    # Just give everyone empty lists if they don't have something already. They'll be deleted anyway.
-    tx.run("""MATCH (n:Board:Intermediary) WHERE NOT EXISTS (n.win_list) SET n.win_list = []""")
-    tx.run("""MATCH (n:Board:Intermediary) WHERE NOT EXISTS (n.lose_list) SET n.lose_list = []""")
-
-    # Now merge them upwards
-
-    # Ok. This is a long one.
-    # Loop through the relevant levels
-    # Get the intermediary nodes below each node in the current layer
-    # Get the current level node and collect the nodes below it
-    #  Flatten the lose_lists from children
-    #  Repeat with win_lists
-    # Unwind the lists, combine them with our current node's lists and dedupe them
-    # Grab the deduped list sizes
-    # Save them lists and compute ratio.
-
-    # Ok, for some reason this unwind is not working, like it's going backwards maybe?
-    # Or maybe just doing one iteration >:C
-    # Doing this manually, it really chugs at levels 3 and up since these lists are obnoxiously large
-    # I tried. Will revert to direct computation :/
-    tx.run("""
-            UNWIND [7, 6, 5, 4, 3, 2, 1, 0] as level_no
-            MATCH (n:Board:Intermediary {level: level_no})-->(m:Board:Intermediary)
-            WITH n, COLLECT(m) AS m
-            WITH n,
-                REDUCE(l = [], x IN m | l + x.lose_list) AS flattened_losers,
-                REDUCE(l = [], x IN m | l + x.win_list) AS flattened_winners
-            UNWIND n.lose_list + flattened_losers AS new_losers
-            UNWIND n.win_list + flattened_winners AS new_winners
-            WITH n, COLLECT(DISTINCT new_losers) AS new_lose_list, COLLECT(DISTINCT new_winners) AS new_win_list
-            WITH n, new_lose_list, SIZE(new_lose_list) as total_losers, new_win_list, SIZE(new_win_list) as total_winners
-            SET n.lose_list = new_lose_list, n.win_list = new_win_list,
-                n.potential = CASE total_losers WHEN 0 THEN 9999 ELSE toFloat(total_winners)/total_losers END
-            """)
-
-    # Tabulate and toss intermediate data
-
-    tx.run("""
-            MATCH (n:Board:Intermediary)
-            
-            """)
-
     for level_no in progressbar.progressbar([8, 7, 6, 5, 4, 3, 2, 1, 0]):
         # Attempt at a bottom-up build for faster computation
         # {{ to escape for format()
+        # An intermediary MUST lead to some sort of end state or else the graph is busted
         tx.run("""
-            MATCH (n:Board:Intermediary {{level: {level_no}}})-->(m:Board:)
+            MATCH (n:Board:Intermediary {{level: {level_no}}})-[*]->(m:Board:End)
             WITH n, COLLECT(DISTINCT m) as m
-            WITH n, [x IN m WHERE exists(x.winner) AND x.winner = 'U' | x.state] as winner_children, 
-                [x IN m WHERE exists(x.winner) AND x.winner = 'T' | x.state] as loser_children
-
-                SET n.win_list = winner_children, n.lose_list = loser_children
-            """.format(level_no=cypher_repr(level_no)))
-'''
-    for level_no in progressbar.progressbar([0, 1, 2, 3, 4, 5, 6, 7, 8]):
-        # Layer 9 has no potential (it's terminal) so we'll skip it
-        # Also, layer 0 is just the initial board, which should be 0.5
-        # It could be skipped since there's no value to gain from layer 0 stats, or hardcoded
-        # It'll also probably take the longest to compute.
-
-        # You could build potential in steps and build from the bottom up by
-        #  storing intermediary win/loss lists in the nodes and combining and deduping them at each higher layer
-        # May be worthwhile. May not. Let's see how long this takes to compute.
-        tx.run("""
-            MATCH (n:Board)-[*]->(m:Board) WHERE n.level = {level_no} AND EXISTS(m.winner)
-            WITH n, COLLECT(DISTINCT m) as m
-            WITH n, SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'U']) as win_points, 
-                SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'T']) as loss_points
-
-                SET n.potential = CASE loss_points WHEN 0 THEN 9999 ELSE win_points/loss_points END
+            WITH n, SIZE(FILTER(x IN m WHERE x:Win)) as winner_children, 
+                SIZE(FILTER(x IN m WHERE x:Loss)) as loser_children,
+                SIZE(FILTER(x IN m WHERE x:Tie)) as tie_total
+            SET n.potential = CASE loser_children WHEN 0 THEN 9999.99 ELSE toFloat(winner_children)/loser_children END,
+                n.desperation = CASE loser_children WHEN 0 THEN 9999.99 ELSE (toFloat(winner_children)+tie_total)/loser_children END
             """.format(level_no=cypher_repr(level_no)))
 
     print('Commit.')
@@ -482,17 +404,46 @@ def db_process(bolt_url=None):
     for x in {"potential"} - {x[0] for x in s.get_indexes("Board")}:
         s.create_index("Board", x)
 
+    print('Done!')
+    return
+
+
+def db_stats(bolt_url=None):
+    if bolt_url:
+        g = Graph(bolt_url)
+    else:
+        g = Graph('bolt://neo4j:new password@localhost:7687')
+
+    print('Counting levels...')
+    print(g.run("""
+        UNWIND [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] AS level_no
+        MATCH (n:Board {level: level_no})
+        WITH level_no, COLLECT(n) as n
+        RETURN level_no, SIZE(n) as total,
+            SIZE(FILTER(x IN n WHERE x:Intermediary)) as intermediary,
+            SIZE(FILTER(x IN n WHERE x:End)) as end,
+            SIZE(FILTER(x IN n WHERE x:Win)) as win,
+            SIZE(FILTER(x IN n WHERE x:Loss)) as loss,
+            SIZE(FILTER(x IN n WHERE x:Tie)) as tie
+            ORDER BY level_no ASC
+        """).to_table())
+
     print('Evaluating potential...')
     # Change to accumulate 9999s to a separate list and count them
     print(g.run("""
-    UNWIND [0, 1, 2, 3, 4, 5, 6, 7, 8] as level_no
-    MATCH (n:Board {level: level_no}) WHERE EXISTS(n.potential) AND n.potential <> 9999
-    RETURN level_no, min(n.potential), avg(n.potential), max(n.potential)
+    UNWIND [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] AS level_no
+    MATCH (n:Board:Intermediary {level: level_no})
+    WITH level_no, COLLECT(n) AS n
+    WITH level_no,
+        FILTER(x IN n WHERE x.potential <> 9999.99) AS risky_list,
+        FILTER(x IN n WHERE x.potential = 9999.99) AS inevitable
+    UNWIND risky_list AS risky
+    RETURN level_no, SIZE(inevitable), min(risky.potential), avg(risky.potential), max(risky.potential),
+        min(risky.desperation), avg(risky.desperation), max(risky.desperation) ORDER BY level_no ASC
     """).to_table())
 
     print('Done!')
     return
-'''
 
 
 def debug_dump():
@@ -505,11 +456,13 @@ def debug_dump():
 if __name__ == '__main__':
     # DFS_recurse_generate()
     # BFS_recurse_generate()
-    node_generate()
+    #node_generate()
     # stat_check()
     # prime_node_set()
     # debug_dump()
 
-    db_feed(sys.argv[1] if len(sys.argv) > 1 else None)
+    #db_feed(sys.argv[1] if len(sys.argv) > 1 else None)
 
-    # db_process(sys.argv[1] if len(sys.argv) > 1 else None)
+    #db_post_process(sys.argv[1] if len(sys.argv) > 1 else None)
+
+    db_stats(sys.argv[1] if len(sys.argv) > 1 else None)
