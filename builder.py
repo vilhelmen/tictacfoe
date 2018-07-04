@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 
-from py2neo import Node, Graph, Relationship, Subgraph, Schema
 import itertools
-import progressbar
+import math
 import sys
+
+import progressbar
+from py2neo import Node, Graph, Relationship, Subgraph, cypher_escape
+
 # Maybe just use the raw neo4j library?
 
 
@@ -14,6 +17,7 @@ docker run --publish=7474:7474 --publish=7687:7687 neo4j
 # We need to deduplicate nodes, but not edges. Edges will always be unique.
 graph_nodes = {}
 graph_edges = []
+
 
 # Alternatively, we can load it directly into the db.
 # But we'll avoid the hassle of talking back and forth with the db doing it this way
@@ -79,7 +83,7 @@ def prime_node_set(str_key=True):
     if str_key:
         state_itr = map(lambda x: ''.join(x), state_itr)
 
-    state_itr = map(lambda x: (x, 9-x.count(' '), *check_wins(x)), state_itr)
+    state_itr = map(lambda x: (x, 9 - x.count(' '), *check_wins(x)), state_itr)
 
     total_wins, total_losses, total_ties, total_invalid, total_states = (0, 0, 0, 0, 3 ** 9)
 
@@ -143,7 +147,7 @@ def DFS_recurse_board(current_state, move, where, previous_state_node, init=Fals
         # We need to generate len(next_moves)*2 new boards and send them to the next level of processing
         for x in ['U', 'T']:
             # Thread these if init (But they'd probably have to be processes and uggghhhhh)
-            new_state = current_state[0:new_move] + x + current_state[new_move+1:]
+            new_state = current_state[0:new_move] + x + current_state[new_move + 1:]
             # This prevents unnecessary recursions. A boon to the 95 minute runtime.
             if new_state in graph_nodes:
                 DFS_recurse_board(new_state, x, new_move, current_state_node)
@@ -263,6 +267,15 @@ def node_generate():
     print(len(graph_nodes), "nodes and", len(graph_edges), "edges. Woooo")
 
 
+def grouper(iterable, n):
+    """Groups iterable into chunks of size n (does not pad on poor division)"""
+    it = iter(iterable)
+    group = tuple(itertools.islice(it, n))
+    while group:
+        yield group
+        group = tuple(itertools.islice(it, n))
+
+
 def db_feed(bolt_url=None):
     if bolt_url:
         g = Graph(bolt_url)
@@ -277,14 +290,27 @@ def db_feed(bolt_url=None):
     print('Tossing old data...')
     g.delete_all()
 
-    # This feels super slow, let's iterate and push. within a transaction
-    graph = Subgraph(nodes=graph_nodes.values(), relationships=graph_edges)
-    print('Pushing graph...')
-    # I'd really like some sort of progress meter here
-    # Could run create in a separate thread, iterate on calling join with a timeout
-    # Each iter ticks the bar more
-    g.create(graph)
-    # nodes and edges are now bound to their server copies
+    # Ok, so the push of the full graph takes 12 minutes(!)
+    # But doing parts individually takes FOREVER
+    # But if we chunk the parts... Hehehe
+    # WHAT THE HELL PUSHING THESE CHUNKS TAKES SECONDS. I'm even on my cell connection. I'm so mad.
+    print('Pushing nodes...')
+    tx = g.begin()
+    for chunk in progressbar.progressbar(grouper(graph_nodes.values(), math.ceil(len(graph_nodes) / 10)), max_value=10):
+        subg = Subgraph(nodes=chunk)
+        tx.create(subg)
+    print('Commit.')
+    tx.commit()
+
+    print('Pushing edges...')
+    tx = g.begin()
+    for chunk in progressbar.progressbar(grouper(graph_edges, math.ceil(len(graph_edges) / 10)), max_value=10):
+        subg = Subgraph(relationships=chunk)
+        tx.create(subg)
+    print('Commit.')
+    tx.commit()
+
+    # nodes and edges are now bound to their server copies, probably.
 
     s = g.schema
 
@@ -306,7 +332,7 @@ def db_feed(bolt_url=None):
     print('Checking totals...')
     server_nodes = g.run('MATCH (n:Board) RETURN count(n)').evaluate()
     server_edges = g.run('MATCH (:Board)-[r:Move]->(:Board) RETURN count(r)').evaluate()
-    print("Server has", server_nodes, "and", server_edges, "edges.")
+    print("Server has", server_nodes, "nodes and", server_edges, "edges.")
 
     print('Done!')
     return
@@ -316,7 +342,7 @@ def db_process(bolt_url=None):
     if bolt_url:
         g = Graph(bolt_url)
     else:
-        g = Graph('bolt://neo4j:neo4j@localhost:7687')
+        g = Graph('bolt://neo4j:new password@localhost:7687')
 
     # Data more easily computed by the db than us (ideally...)
 
@@ -326,27 +352,48 @@ def db_process(bolt_url=None):
     # Count win nodes user current node. Same with loss?
 
     # This could be done during DFS but that's so slow
-    tx = g.begin()
     # Potential
     # Is a tie a win or a loss? Ignore it?
     # a tie is better than a loss, but not something we should aim for.
+    # Seems like a last resort kind of thing, like if potential is zero.
     # peggy_hill_hoo_yeah.wav works first time
-    tx.run("""
-    MATCH (n:Board)-[*]->(m:Board)
-    WHERE EXISTS(m.winner)
-    WITH n, COLLECT(DISTINCT m) as m
-    WITH n, SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'U']) as win_points, 
-        SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'T']) as loss_points
+    print('Computing node potential...')
+    tx = g.begin()
+    for layer_no in progressbar.progressbar([8, 7, 6, 5, 4, 3, 2, 1, 0]):
+        # Layer 9 has no potential (it's terminal) so we'll skip it
+        # Also, layer 0 is just the initial board, which should be 0.5
+        # It could be skipped since there's no value to gain from layer 0 stats, or hardcoded
+        # It'll also probably take the longest to compute.
 
-        SET n.potential = CASE loss_points WHEN 0 THEN 9999 ELSE win_points/loss_points END
-    """)
-    # All nodes in level 9 are leaves, so skip it(?)
-    tx.run("""
-    UNWIND [8, 7, 6, 5, 4, 3, 2, 1, 0] as layer_no
-        MATCH (n:Board {layer: layer_no})
-        WHERE NOT EXISTS(n.winner)
-        WITH COLLECT(n) as 
-    """)
+        # You could build potential in steps and build from the bottom up by
+        #  storing intermediary win/loss lists in the nodes and combining and deduping them at each higher layer
+        # May be worthwhile. May not. Let's see how long this takes to compute.
+        tx.run("""
+            MATCH (n:Board {layer: {layer_no})-[*]->(m:Board) WHERE EXISTS(m.winner)
+            WITH n, COLLECT(DISTINCT m) as m
+            WITH n, SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'U']) as win_points, 
+                SIZE([x IN m WHERE exists(x.winner) AND x.winner = 'T']) as loss_points
+
+                SET n.potential = CASE loss_points WHEN 0 THEN 9999 ELSE win_points/loss_points END
+            """.format(layer_no=cypher_escape(layer_no)))
+    print('Commit.')
+    tx.commit()
+
+    s = g.schema
+    print('Building potential index...')
+    for x in {"potential"} - {x[0] for x in s.get_indexes("Board")}:
+        s.create_index("Board", x)
+
+    print('Evaluating potential...')
+    # Change to accumulate 9999s to a separate list and count them
+    print(g.run("""
+    UNWIND [0, 1, 2, 3, 4, 5, 6, 7, 8] as layer_no
+    MATCH (n:Board {layer: layer_no}) WHERE EXISTS(n.potential) AND n.potential <> 9999
+    RETURN layer_no, min(n.potential), avg(n.potential), max(n.potential)
+    """).to_table())
+
+    print('Done!')
+    return
 
 
 def debug_dump():
@@ -357,12 +404,12 @@ def debug_dump():
 
 
 if __name__ == '__main__':
-    #DFS_recurse_generate()
-    #BFS_recurse_generate()
+    # DFS_recurse_generate()
+    # BFS_recurse_generate()
     node_generate()
-    #stat_check()
-    #prime_node_set()
-    #debug_dump()
+    # stat_check()
+    # prime_node_set()
+    # debug_dump()
 
     db_feed(sys.argv[1] if len(sys.argv) > 1 else None)
 
