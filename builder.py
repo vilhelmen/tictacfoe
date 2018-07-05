@@ -107,6 +107,7 @@ def prime_node_set(str_key=True):
                 total_ties += 1
                 new_node['winner'] = 'N'
                 new_node.add_label("Tie")
+                new_node.add_label("End")
             else:
                 new_node.add_label("Intermediary")
         else:
@@ -382,6 +383,13 @@ def db_post_process(bolt_url=None):
     print('Computing node potential...')
     tx = g.begin()
 
+    # TODO: Rework this to respect turn ordering. Assume we are moving to this node, so the next move is always a T, etc
+    # But the only way to do this seems to be writing it out manually, which is lame as hell
+    # And I can't quite put my finger on what to compute and what it implies
+
+    # Maybe I have to split the graph from the root, one direction is U first, the other T, and don't let the sides interconnect
+    # That would fix the turn ordering issue, but then we have ~2x the nodes
+
     for level_no in progressbar.progressbar([8, 7, 6, 5, 4, 3, 2, 1, 0]):
         # Attempt at a bottom-up build for faster computation
         # {{ to escape for format()
@@ -456,13 +464,13 @@ def debug_dump():
 if __name__ == '__main__':
     # DFS_recurse_generate()
     # BFS_recurse_generate()
-    #node_generate()
+    node_generate()
     # stat_check()
     # prime_node_set()
     # debug_dump()
 
-    #db_feed(sys.argv[1] if len(sys.argv) > 1 else None)
+    db_feed(sys.argv[1] if len(sys.argv) > 1 else None)
 
-    #db_post_process(sys.argv[1] if len(sys.argv) > 1 else None)
+    db_post_process(sys.argv[1] if len(sys.argv) > 1 else None)
 
     db_stats(sys.argv[1] if len(sys.argv) > 1 else None)
