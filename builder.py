@@ -17,6 +17,8 @@ docker run --publish=7474:7474 --publish=7687:7687 neo4j
 # We need to deduplicate nodes, but not edges. Edges will always be unique.
 graph_nodes = {}
 graph_edges = []
+# Turn implies a single move, let's go with round
+graph_rounds = []
 
 
 # Alternatively, we can load it directly into the db.
@@ -163,9 +165,39 @@ def node_generate():
                     # state is valid, add to edges
                     graph_edges.append(Relationship(current_state_node, "Move", next_node, who=move, where=new_move))
 
-    # Second layer connectivity, compound moves. Enforces turn ordering by combining us/them move pairs into a single edge
+    # Second layer connectivity, compound moves
+    # This enforces turn ordering by combining us/them move pairs into a single edge
+    # Single move rounds are always our move
+    print("Building rounds...")
+    for current_state, current_state_node in progressbar.progressbar(graph_nodes.items()):
+        # Look at all moves from this node, and add valid moves
+
+        # If we have at least two moves, go through all permutations
+        # Rounds are always Us and then Them, unless there is only one empty space, in which it is always us.
+        move_list = [i for i, ltr in enumerate(current_state) if ltr == ' ']
+        if len(move_list) == 1:
+            next_node = graph_nodes.get(current_state[0:move_list[0]] + 'U' + current_state[move_list[0] + 1:])
+            if next_node:
+                graph_rounds.append(Relationship(current_state_node, "Round", next_node, where=move_list))
+        else:
+            single_move_blacklist = set()
+            for move_pair in itertools.permutations(move_list, 2):
+                move_one_state = current_state[0:move_pair[0]] + 'U' + current_state[move_pair[0] + 1:]
+                move_one_node = graph_nodes.get(move_one_state)
+
+                move_two_state = move_one_state[0:move_pair[1]] + 'T' + move_one_state[move_pair[1] + 1:]
+                move_two_node = graph_nodes.get(move_two_state)
+                # If the double move node isn't valid, we need to check the single node move
+                if move_two_node:
+                    # Turn is valid
+                    graph_rounds.append(Relationship(current_state_node, "Round", move_two_node, where=list(move_pair)))
+                elif move_one_node and move_pair[0] not in single_move_blacklist:
+                    # Only one move is valid, and we haven't done it yet
+                    graph_rounds.append(Relationship(current_state_node, "Round", move_one_node, where=[move_pair[0]]))
+                    single_move_blacklist.add(move_pair[0])
+
     print("Done processing!")
-    print(len(graph_nodes), "nodes and", len(graph_edges), "edges. Woooo")
+    print(len(graph_nodes), "nodes,", len(graph_edges), "edges,", len(graph_rounds), "rounds. Woooo")
 
 
 def grouper(iterable, n):
@@ -211,6 +243,14 @@ def db_feed(bolt_url=None):
     print('Commit.')
     tx.commit()
 
+    print('Pushing rounds...')
+    tx = g.begin()
+    for chunk in progressbar.progressbar(grouper(graph_rounds, math.ceil(len(graph_rounds) / 40)), max_value=40):
+        subg = Subgraph(relationships=chunk)
+        tx.create(subg)
+    print('Commit.')
+    tx.commit()
+
     # nodes and edges are now bound to their server copies, probably.
 
     s = g.schema
@@ -227,6 +267,7 @@ def db_feed(bolt_url=None):
         s.create_index("Board", x)
 
     # Indices for Intermediary, Win, Loss, Tie, End, Start???? EHHH??
+    # Rounds?
 
     # I can't imagine these are useful but why not
     for x in {"who", "where"} - {x[0] for x in s.get_indexes("Move")}:
@@ -235,7 +276,8 @@ def db_feed(bolt_url=None):
     print('Checking totals...')
     server_nodes = g.run('MATCH (n:Board) RETURN count(n)').evaluate()
     server_edges = g.run('MATCH (:Board)-[r:Move]->(:Board) RETURN count(r)').evaluate()
-    print("Server has", server_nodes, "nodes and", server_edges, "edges.")
+    server_rounds = g.run('MATCH (:Board)-[r:Round]->(:Board) RETURN count(r)').evaluate()
+    print("Server has", server_nodes, "nodes,", server_edges, "edges, and", server_rounds, "rounds.")
 
     print('Done!')
     return
@@ -353,6 +395,6 @@ if __name__ == '__main__':
 
     db_feed(sys.argv[1] if len(sys.argv) > 1 else None)
 
-    db_post_process(sys.argv[1] if len(sys.argv) > 1 else None)
+    #db_post_process(sys.argv[1] if len(sys.argv) > 1 else None)
 
-    db_stats(sys.argv[1] if len(sys.argv) > 1 else None)
+    #db_stats(sys.argv[1] if len(sys.argv) > 1 else None)
