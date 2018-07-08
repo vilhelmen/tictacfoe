@@ -306,22 +306,15 @@ def db_post_process(bolt_url=None):
     # a tie is better than a loss, but not something we should aim for.
     # Seems like a last resort kind of thing, like if potential is zero.
     # peggy_hill_hoo_yeah.wav works first time
-    print('Computing node potential...')
+    print('Computing node round potential...')
     tx = g.begin()
-
-    # TODO: Rework this to respect turn ordering. Assume we are moving to this node, so the next move is always a T, etc
-    # But the only way to do this seems to be writing it out manually, which is lame as hell
-    # And I can't quite put my finger on what to compute and what it implies
-
-    # Maybe I have to split the graph from the root, one direction is U first, the other T, and don't let the sides interconnect
-    # That would fix the turn ordering issue, but then we have ~2x the nodes
 
     for level_no in progressbar.progressbar([8, 7, 6, 5, 4, 3, 2, 1, 0]):
         # Attempt at a bottom-up build for faster computation
         # {{ to escape for format()
         # An intermediary MUST lead to some sort of end state or else the graph is busted
         tx.run("""
-            MATCH (n:Board:Intermediary {{level: {level_no}}})-[*]->(m:Board:End)
+            MATCH (n:Board:Intermediary {{level: {level_no}}})-[:Round*]->(m:Board:End)
             WITH n, COLLECT(DISTINCT m) as m
             WITH n, SIZE(FILTER(x IN m WHERE x:Win)) as winner_children, 
                 SIZE(FILTER(x IN m WHERE x:Loss)) as loser_children,
@@ -395,6 +388,6 @@ if __name__ == '__main__':
 
     db_feed(sys.argv[1] if len(sys.argv) > 1 else None)
 
-    #db_post_process(sys.argv[1] if len(sys.argv) > 1 else None)
+    db_post_process(sys.argv[1] if len(sys.argv) > 1 else None)
 
-    #db_stats(sys.argv[1] if len(sys.argv) > 1 else None)
+    db_stats(sys.argv[1] if len(sys.argv) > 1 else None)
