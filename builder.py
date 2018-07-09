@@ -306,6 +306,9 @@ def db_post_process(bolt_url=None):
     # a tie is better than a loss, but not something we should aim for.
     # Seems like a last resort kind of thing, like if potential is zero.
     # peggy_hill_hoo_yeah.wav works first time
+
+    # TODO: make better, ignoring for now
+    '''
     print('Computing node round potential...')
     tx = g.begin()
 
@@ -330,6 +333,75 @@ def db_post_process(bolt_url=None):
     print('Building potential index...')
     for x in {"potential"} - {x[0] for x in s.get_indexes("Board")}:
         s.create_index("Board", x)
+    '''
+
+    # More analysis, flag nodes with a direct T move to a Loss as critical
+    # critical nodes have only one acceptable move, a block
+
+    # Mark nodes with >1 direct Ts to Loss as some sort of fail state
+    # Remove Rounds to them? We never want to go there.
+
+    # So, we can't really have an if count(r) == 1 set n:critical elif count(r) > 1...
+    # but you can fake it with foreach and list tricks
+    print('Computing node criticality...')
+    sizes = g.run("""
+                MATCH (n:Board:Intermediary)-[r:Round]->(m:Board:Loss)
+                WITH n, count(r) AS total
+                WITH COLLECT([n, total]) as pairs
+                WITH [x IN pairs WHERE x[1] = 1 | x[0]] AS criticals, [x IN pairs WHERE x[1] > 1 | x[0]] AS doomed
+                FOREACH (n IN criticals | SET n:Critical)
+                FOREACH (n IN doomed | SET n:Doomed)
+                RETURN [SIZE(criticals), SIZE(doomed)]
+            """).evaluate()
+    print(sizes[0], "critical nodes,", sizes[1], "doomed nodes.")
+
+    print('Computing node imminence...')
+    sizes = g.run("""
+                MATCH (n:Board:Intermediary)-[r:Round]->(m:Board:Win)
+                SET n:Imminent
+                RETURN COUNT(n)
+            """).evaluate()
+    print(sizes[0], "imminent nodes")
+
+    # Hopefully the final edge type, ApprovedRound
+    # These are the ones actually approved for use
+    # Imminent states should only move to win states. Anything else is dumb.
+    # Critical states should only have blocking moves. Anything else is dumb.
+    # General round constraints:
+    #   No moves to doomed states. (Another criticality thing?)
+    #   No moves to critical states unless they can still lead to victory(?)
+    #   Only moves to imminent states if possible??
+    #  These are treating it like we control both moves, though. This may result in gaps in logic.
+    print('Creating approved rounds...')
+
+    print('Approving imminent rounds...')
+    total = g.run("""
+                MATCH (n:Board:Imminent)-[r:Round]->(m:Board:Win)
+                CREATE (n)-[:ApprovedRound PROPERTIES(r)]->(m)
+                RETURN COUNT(r)
+            """).evaluate()
+    print(total, "Imminent approved rounds")
+
+    print('Approving critical block rounds')
+    # Find moves to Loss nodes. these moves should all share the same T move
+    # Take the T move, make it a U move, and generate all valid moves out (but not doomed, etc??)
+    # This is getting complicated. Maybe it's easier to just duplicate all rounds and prune bad ones
+    total = g.run("""
+                MATCH (n:Board:Critical)-[r:Round]->(m:Board:Loss)
+                collect distinct U/T moves(?)
+                unwind them
+                CREATE (n)-[:ApprovedRound where: [block, other]]->(m)
+                RETURN COUNT(??)
+            """).evaluate()
+    # No rounds going to Doomed or Loss nodes. Skip critical nodes (for now, needs more processing).
+    # Skip connections to nodes that only lead to nodes with no Win/Tie children
+    # Only move to criticals if the critical can be redeemed
+    g.run("""
+            MATCH (n:Board:Intermediary)-[r:Round]->(m:Board)
+            WHERE NOT m:Doomed AND NOT m:Loss AND NOT n:Critical
+        """)
+
+    # may need to pull all critical nodes and process them locally
 
     print('Done!')
     return
